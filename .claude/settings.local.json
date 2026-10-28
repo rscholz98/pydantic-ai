@@ -1,0 +1,19 @@
+{
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/rscholz/Repos/pydantic-ai/.claude/hooks/public_text_guard.py"
+          }
+        ]
+      }
+    ]
+  }
+}
