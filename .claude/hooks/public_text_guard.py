@@ -45,9 +45,6 @@ REPO_REF = re.compile(r'^(?P<owner>[\w.-]+)/[\w.-]+#\d+$')
 """A positional `owner/repo#N` reference. Bare `owner/repo` is never a selector (a `--body-file`
 path looks the same), so only the numbered form counts."""
 
-COMMAND_WORDS = {'gh', 'git'}
-"""Tokens that make a segment one this guard has to understand before it may be exempted."""
-
 
 def own_repo_owner(tokens: list[str], own: set[str]) -> bool:
     """One simple `gh pr|issue ...` invocation that targets, by flag and by any positional
@@ -84,14 +81,14 @@ def own_repo_owner(tokens: list[str], own: set[str]) -> bool:
 
 
 def own_repo(command: str) -> bool:
-    """True only when every segment that runs `gh` or `git` is a validated own-repo
-    `gh pr|issue ...` call and at least one such call exists. Anything else, including a
-    segment that cannot be parsed, a wrapper (`env`, `sh -c`), a variable in command position,
-    or command substitution anywhere, fails closed and keeps the blocked-name check."""
+    """True only for the narrowest shape: optional `cd <path> &&` segments, then exactly one
+    validated own-repo `gh pr|issue ...` call, and no shell expansion character (`$`, backtick)
+    anywhere in the command. Every other shape, including any wrapper, a second command of any
+    kind, or a segment that cannot be parsed, fails closed and keeps the blocked-name check."""
     if not OWN_ORGS_FILE.is_file():
         return False
     own = {o.strip().lower() for o in OWN_ORGS_FILE.read_text().splitlines() if o.strip() and not o.startswith('#')}
-    if '$(' in command or '`' in command:
+    if '$' in command or '`' in command:
         return False
     validated = 0
     for seg in CONTROL.split(command):
@@ -103,14 +100,12 @@ def own_repo(command: str) -> bool:
             return False
         if not tokens:
             continue
-        if any(tok.startswith('$') for tok in tokens):
-            return False
-        if not (COMMAND_WORDS & set(tokens)) and not PUBLIC.search(seg):
+        if tokens[0] == 'cd' and len(tokens) == 2:
             continue
         if len(PUBLIC.findall(seg)) != 1 or not own_repo_owner(tokens, own):
             return False
         validated += 1
-    return validated > 0
+    return validated == 1
 
 
 def referenced_files(command: str) -> list[str]:
