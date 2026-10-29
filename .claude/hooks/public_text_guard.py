@@ -45,62 +45,72 @@ REPO_REF = re.compile(r'^(?P<owner>[\w.-]+)/[\w.-]+#\d+$')
 """A positional `owner/repo#N` reference. Bare `owner/repo` is never a selector (a `--body-file`
 path looks the same), so only the numbered form counts."""
 
-
-def positional_owners(tokens: list[str]) -> list[str]:
-    """Owners named by positional URL or `owner/repo#N` arguments, which `gh` honours over `-R`."""
-    owners: list[str] = []
-    for tok in tokens[2:]:
-        if 'github.com/' in tok:
-            rest = tok.split('github.com/', 1)[1]
-            owners.append(rest.split('/')[0].lower() if '/' in rest else '')
-        elif (m := REPO_REF.match(tok)) and not tok.startswith(('-', '.', '/', '~')):
-            owners.append(m.group('owner').lower())
-    return owners
+COMMAND_WORDS = {'gh', 'git'}
+"""Tokens that make a segment one this guard has to understand before it may be exempted."""
 
 
-def repo_owners(tokens: list[str]) -> list[str]:
-    """Every owner named by `-R`/`--repo` in one simple `gh` invocation."""
-    owners: list[str] = []
-    for i, tok in enumerate(tokens):
-        value = None
-        if tok in {'-R', '--repo'} and i + 1 < len(tokens):
-            value = tokens[i + 1]
+def own_repo_owner(tokens: list[str], own: set[str]) -> bool:
+    """One simple `gh pr|issue ...` invocation that targets, by flag and by any positional
+    reference, exactly one repo under an own owner. Any flag or target form this does not
+    recognise exactly fails closed."""
+    if len(tokens) < 3 or tokens[0] != 'gh' or tokens[1] not in {'pr', 'issue'}:
+        return False
+    flag_owners: list[str] = []
+    positional_owners: list[str] = []
+    i = 2
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in {'-R', '--repo'}:
+            if i + 1 >= len(tokens):
+                return False
+            value, i = tokens[i + 1], i + 2
         elif tok.startswith('--repo='):
-            value = tok[len('--repo='):]
-        if value is not None:
-            value = value.removeprefix('https://github.com/')
-            owners.append(value.split('/')[0].lower() if '/' in value else '')
-    return owners
+            value, i = tok[len('--repo='):], i + 1
+        elif tok.startswith('-R') or tok.startswith('--repo'):
+            return False  # `-Rowner/repo` and other forms pflag accepts but this parser does not
+        else:
+            lowered = tok.lower()
+            if 'github' in lowered or '://' in lowered:
+                return False  # a URL target in any spelling; only the flag form is exempted
+            if (m := REPO_REF.match(tok)) and not tok.startswith(('-', '.', '/', '~')):
+                positional_owners.append(m.group('owner').lower())
+            i += 1
+            continue
+        value = value.removeprefix('https://github.com/')
+        flag_owners.append(value.split('/')[0].lower() if '/' in value else '')
+    if len(flag_owners) != 1 or flag_owners[0] not in own:
+        return False
+    return all(owner in own for owner in positional_owners)
 
 
 def own_repo(command: str) -> bool:
-    """True only when every public-text invocation in the command is a plain `gh pr|issue ...`
-    naming exactly one repo under one of Richard's own owners, by flag and by any positional
-    URL or `owner/repo#N`. Anything else (git commit, gh api, a missing or second repo flag,
-    command substitution, grouping, an unparsable segment) fails closed and keeps the name check."""
+    """True only when every segment that runs `gh` or `git` is a validated own-repo
+    `gh pr|issue ...` call and at least one such call exists. Anything else, including a
+    segment that cannot be parsed, a wrapper (`env`, `sh -c`), a variable in command position,
+    or command substitution anywhere, fails closed and keeps the blocked-name check."""
     if not OWN_ORGS_FILE.is_file():
         return False
     own = {o.strip().lower() for o in OWN_ORGS_FILE.read_text().splitlines() if o.strip() and not o.startswith('#')}
     if '$(' in command or '`' in command:
         return False
-    public_segments = [seg for seg in CONTROL.split(command) if PUBLIC.search(seg)]
-    if not public_segments:
-        return False
-    for seg in public_segments:
-        if len(PUBLIC.findall(seg)) != 1:
-            return False
+    validated = 0
+    for seg in CONTROL.split(command):
+        if not seg.strip():
+            continue
         try:
             tokens = shlex.split(seg)
         except ValueError:
             return False
-        if len(tokens) < 3 or tokens[0] != 'gh' or tokens[1] not in {'pr', 'issue'}:
+        if not tokens:
+            continue
+        if any(tok.startswith('$') for tok in tokens):
             return False
-        flag_owners = repo_owners(tokens)
-        if len(flag_owners) != 1 or flag_owners[0] not in own:
+        if not (COMMAND_WORDS & set(tokens)) and not PUBLIC.search(seg):
+            continue
+        if len(PUBLIC.findall(seg)) != 1 or not own_repo_owner(tokens, own):
             return False
-        if any(owner not in own for owner in positional_owners(tokens)):
-            return False
-    return True
+        validated += 1
+    return validated > 0
 
 
 def referenced_files(command: str) -> list[str]:
