@@ -57,6 +57,7 @@ elsewhere), read its `SKILL.md` under `.agents/skills/<name>/` and follow it ste
 
 | Situation | Skill |
 | --- | --- |
+| Start of every new thread, before anything else | sync `main` with upstream (see [Git layout](#git-layout-on-this-mac)); only then read code or answer questions about upstream state |
 | Start of every session on a branch | `branch-context` (preloaded): read the brief, the decisions log and the latest handoff; log decisions as you make them |
 | New issue or problem, no PR yet | `initialize-worktree` (study, brief, plan, optionally implement, open the PR) |
 | Picking up an existing PR (ours or someone else's) | `adopt-pr` |
@@ -127,6 +128,12 @@ issue and review comments.
 | `upstream` | `pydantic/pydantic-ai` | fetch only, **never push** |
 
 - Keep `main` in the main checkout tracking `origin/main`. Don't commit on it.
+- **Always pull at the start of a new thread.** In the main checkout, before any other work:
+  `git fetch upstream && git pull --ff-only upstream main && git push origin main`, then
+  `make install` when `uv.lock` changed. A stale checkout gives stale answers: on 2026-10-29 a
+  one-day-old `main` was 134 commits behind and missing an already-merged feature. Worktree
+  branches are not pulled by this step; a PR branch merges `upstream/main` only on conflicts,
+  per the append-only rule below.
 - One worktree per topic, as a sibling directory:
   `git worktree add ../pydantic-ai-<issue> -b <branch> upstream/main`. The branch-context files
   live inside that worktree.
