@@ -36,9 +36,26 @@ SELF_HANDLE = 'rscholz98'
 FILE_FLAGS = {'-F', '--file', '--body-file', '-b'}
 
 
-CONTROL = re.compile(r'\|\||&&|;|\||\n')
-"""Shell control operators: a command is checked segment by segment so one own-repo flag cannot
-cover a second, public invocation in the same line."""
+CONTROL = re.compile(r'\|\||&&|\|&|;|\||&|\n|\(|\)|\{|\}')
+"""Shell control operators and grouping: a command is checked segment by segment so one own-repo
+flag cannot cover a second, public invocation on the same line. A legitimate `&` or `|` inside
+quoted text makes a segment unparsable, which fails closed to the name check."""
+
+REPO_REF = re.compile(r'^(?P<owner>[\w.-]+)/[\w.-]+#\d+$')
+"""A positional `owner/repo#N` reference. Bare `owner/repo` is never a selector (a `--body-file`
+path looks the same), so only the numbered form counts."""
+
+
+def positional_owners(tokens: list[str]) -> list[str]:
+    """Owners named by positional URL or `owner/repo#N` arguments, which `gh` honours over `-R`."""
+    owners: list[str] = []
+    for tok in tokens[2:]:
+        if 'github.com/' in tok:
+            rest = tok.split('github.com/', 1)[1]
+            owners.append(rest.split('/')[0].lower() if '/' in rest else '')
+        elif (m := REPO_REF.match(tok)) and not tok.startswith(('-', '.', '/', '~')):
+            owners.append(m.group('owner').lower())
+    return owners
 
 
 def repo_owners(tokens: list[str]) -> list[str]:
@@ -58,17 +75,19 @@ def repo_owners(tokens: list[str]) -> list[str]:
 
 def own_repo(command: str) -> bool:
     """True only when every public-text invocation in the command is a plain `gh pr|issue ...`
-    naming exactly one repo under one of Richard's own owners. Anything else (git commit, gh api,
-    a missing or second repo flag, command substitution, an unparsable segment) fails closed and
-    keeps the blocked-name check."""
+    naming exactly one repo under one of Richard's own owners, by flag and by any positional
+    URL or `owner/repo#N`. Anything else (git commit, gh api, a missing or second repo flag,
+    command substitution, grouping, an unparsable segment) fails closed and keeps the name check."""
     if not OWN_ORGS_FILE.is_file():
         return False
     own = {o.strip().lower() for o in OWN_ORGS_FILE.read_text().splitlines() if o.strip() and not o.startswith('#')}
+    if '$(' in command or '`' in command:
+        return False
     public_segments = [seg for seg in CONTROL.split(command) if PUBLIC.search(seg)]
     if not public_segments:
         return False
     for seg in public_segments:
-        if '$(' in seg or '`' in seg:
+        if len(PUBLIC.findall(seg)) != 1:
             return False
         try:
             tokens = shlex.split(seg)
@@ -76,8 +95,10 @@ def own_repo(command: str) -> bool:
             return False
         if len(tokens) < 3 or tokens[0] != 'gh' or tokens[1] not in {'pr', 'issue'}:
             return False
-        owners = repo_owners(tokens)
-        if len(owners) != 1 or owners[0] not in own:
+        flag_owners = repo_owners(tokens)
+        if len(flag_owners) != 1 or flag_owners[0] not in own:
+            return False
+        if any(owner not in own for owner in positional_owners(tokens)):
             return False
     return True
 
