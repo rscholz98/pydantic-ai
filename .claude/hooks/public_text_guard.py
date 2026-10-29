@@ -27,6 +27,8 @@ CHECKS: list[tuple[re.Pattern[str], str]] = [
 # One regex per line, kept off the repo so the names themselves stay private.
 NAMES_FILE = Path.home() / '.config/pydantic-ai-public-guard/blocked-names.txt'
 MENTION = re.compile(r'(?<![\w.`/=<\-])@([A-Za-z0-9][A-Za-z0-9-]{0,38})\b')
+# Richard's own handle, allowed in the "on behalf of" attribution line of larger posts.
+SELF_HANDLE = 'rscholz98'
 FILE_FLAGS = {'-F', '--file', '--body-file', '-b'}
 
 
@@ -73,7 +75,7 @@ def main() -> None:
         for pattern, label in checks:
             if pattern.search(text) and label not in problems:
                 problems.append(label)
-        mentions = sorted(set(MENTION.findall(strip_code(text))))
+        mentions = sorted(set(MENTION.findall(strip_code(text))) - {SELF_HANDLE})
         if mentions:
             problems.append('@ mention of ' + ', '.join(mentions))
     if not problems:

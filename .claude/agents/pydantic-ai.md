@@ -100,8 +100,14 @@ issue and review comments.
   that comes from how our app is built (windowed history loads, an append-only store, custom
   AG-UI parsing) is a migration task on our side, not an upstream ask.
 - **Keep it short and plain.** Long AI-generated issue and comment text gets ignored. Aim for
-  Richard's own voice, a few paragraphs at most, and add the disclosure line he uses
-  (`<sub>Investigated with Claude Code.</sub>`) where it fits.
+  Richard's own voice, a few paragraphs at most.
+- **Disclose AI research on larger posts.** Every researched post (an issue, a proposal, a
+  reproduction, a review with findings, any comment longer than a few sentences) starts with this
+  line, alone on top:
+  `> Researched and posted by Claude Code (claude-fable-5-1) on behalf of Richard (@rscholz98).`
+  Use the model id of the session that did the work. A short reply (an offer to take an issue, a
+  one-line answer, an acknowledgement) does not need it. The hook allows the `@rscholz98`
+  self-mention for this line only; every other `@` mention stays banned.
 - **Never use em dashes** in anything you write: code, comments, docs, commits, PR or issue
   text. Upstream's own files use them; don't copy that.
 - **Enforced by a hook.** `.claude/hooks/public_text_guard.py` (wired in this file's
