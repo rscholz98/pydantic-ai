@@ -26,10 +26,41 @@ CHECKS: list[tuple[re.Pattern[str], str]] = [
 ]
 # One regex per line, kept off the repo so the names themselves stay private.
 NAMES_FILE = Path.home() / '.config/pydantic-ai-public-guard/blocked-names.txt'
+# GitHub owners (orgs or users) whose repos are Richard's own: a `gh` command targeting one of
+# them with `-R`/`--repo` skips the blocked-name check, since those names are not secret there.
+# Kept off the repo like the names themselves.
+OWN_ORGS_FILE = Path.home() / '.config/pydantic-ai-public-guard/own-orgs.txt'
 MENTION = re.compile(r'(?<![\w.`/=<\-])@([A-Za-z0-9][A-Za-z0-9-]{0,38})\b')
 # Richard's own handle, allowed in the "on behalf of" attribution line of larger posts.
 SELF_HANDLE = 'rscholz98'
 FILE_FLAGS = {'-F', '--file', '--body-file', '-b'}
+
+
+def target_owner(command: str) -> str | None:
+    """The owner of the repo a `gh` command names with `-R`/`--repo`, if any."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    for i, tok in enumerate(tokens):
+        value = None
+        if tok in {'-R', '--repo'} and i + 1 < len(tokens):
+            value = tokens[i + 1]
+        elif tok.startswith('--repo='):
+            value = tok[len('--repo='):]
+        if value:
+            value = value.removeprefix('https://github.com/')
+            return value.split('/')[0].lower() if '/' in value else None
+    return None
+
+
+def own_repo(command: str) -> bool:
+    """True when the command targets a repo under one of Richard's own GitHub owners."""
+    owner = target_owner(command)
+    if owner is None or not OWN_ORGS_FILE.is_file():
+        return False
+    own = {o.strip().lower() for o in OWN_ORGS_FILE.read_text().splitlines() if o.strip() and not o.startswith('#')}
+    return owner in own
 
 
 def referenced_files(command: str) -> list[str]:
@@ -67,7 +98,7 @@ def main() -> None:
             texts.append(path.read_text(errors='replace'))
     problems: list[str] = []
     checks = list(CHECKS)
-    if NAMES_FILE.is_file():
+    if NAMES_FILE.is_file() and not own_repo(command):
         names = [n.strip() for n in NAMES_FILE.read_text().splitlines() if n.strip() and not n.startswith('#')]
         if names:
             checks.append((re.compile(r'\b(?:' + '|'.join(names) + r')\b'), 'blocked company/product/customer name'))
