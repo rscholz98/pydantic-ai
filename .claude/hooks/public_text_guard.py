@@ -36,31 +36,50 @@ SELF_HANDLE = 'rscholz98'
 FILE_FLAGS = {'-F', '--file', '--body-file', '-b'}
 
 
-def target_owner(command: str) -> str | None:
-    """The owner of the repo a `gh` command names with `-R`/`--repo`, if any."""
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        return None
+CONTROL = re.compile(r'\|\||&&|;|\||\n')
+"""Shell control operators: a command is checked segment by segment so one own-repo flag cannot
+cover a second, public invocation in the same line."""
+
+
+def repo_owners(tokens: list[str]) -> list[str]:
+    """Every owner named by `-R`/`--repo` in one simple `gh` invocation."""
+    owners: list[str] = []
     for i, tok in enumerate(tokens):
         value = None
         if tok in {'-R', '--repo'} and i + 1 < len(tokens):
             value = tokens[i + 1]
         elif tok.startswith('--repo='):
             value = tok[len('--repo='):]
-        if value:
+        if value is not None:
             value = value.removeprefix('https://github.com/')
-            return value.split('/')[0].lower() if '/' in value else None
-    return None
+            owners.append(value.split('/')[0].lower() if '/' in value else '')
+    return owners
 
 
 def own_repo(command: str) -> bool:
-    """True when the command targets a repo under one of Richard's own GitHub owners."""
-    owner = target_owner(command)
-    if owner is None or not OWN_ORGS_FILE.is_file():
+    """True only when every public-text invocation in the command is a plain `gh pr|issue ...`
+    naming exactly one repo under one of Richard's own owners. Anything else (git commit, gh api,
+    a missing or second repo flag, command substitution, an unparsable segment) fails closed and
+    keeps the blocked-name check."""
+    if not OWN_ORGS_FILE.is_file():
         return False
     own = {o.strip().lower() for o in OWN_ORGS_FILE.read_text().splitlines() if o.strip() and not o.startswith('#')}
-    return owner in own
+    public_segments = [seg for seg in CONTROL.split(command) if PUBLIC.search(seg)]
+    if not public_segments:
+        return False
+    for seg in public_segments:
+        if '$(' in seg or '`' in seg:
+            return False
+        try:
+            tokens = shlex.split(seg)
+        except ValueError:
+            return False
+        if len(tokens) < 3 or tokens[0] != 'gh' or tokens[1] not in {'pr', 'issue'}:
+            return False
+        owners = repo_owners(tokens)
+        if len(owners) != 1 or owners[0] not in own:
+            return False
+    return True
 
 
 def referenced_files(command: str) -> list[str]:
