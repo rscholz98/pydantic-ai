@@ -3766,6 +3766,90 @@ def test_dump_load_roundtrip_builtin_tool_return() -> None:
     assert reloaded == original
 
 
+@pytest.mark.parametrize(
+    'with_thinking,expected_shape',
+    [
+        (
+            False,
+            snapshot(
+                [
+                    [UserPromptPart.__qualname__],
+                    [NativeToolCallPart.__qualname__, NativeToolReturnPart.__qualname__, ToolCallPart.__qualname__],
+                    [ToolReturnPart.__qualname__],
+                ]
+            ),
+        ),
+        (
+            True,
+            snapshot(
+                [
+                    [UserPromptPart.__qualname__],
+                    [
+                        ThinkingPart.__qualname__,
+                        NativeToolCallPart.__qualname__,
+                        NativeToolReturnPart.__qualname__,
+                        ToolCallPart.__qualname__,
+                    ],
+                    [ToolReturnPart.__qualname__],
+                ]
+            ),
+        ),
+    ],
+)
+def test_dump_load_roundtrip_builtin_tool_return_before_function_call(
+    with_thinking: bool, expected_shape: list[list[str]]
+) -> None:
+    """A native tool return reloads right after its call, not after a function call that followed it.
+
+    Anthropic rejects a `tool_use` that a server tool result follows in the same assistant turn.
+    """
+    thinking: list[ModelResponsePart] = (
+        [ThinkingPart(content='Search first.', signature='sig', provider_name='anthropic')] if with_thinking else []
+    )
+    original: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart(content='Find my earlier chats')]),
+        ModelResponse(
+            parts=[
+                *thinking,
+                NativeToolCallPart(
+                    tool_name='tool_search', tool_call_id='srv_1', args='{"query":"chats"}', provider_name='anthropic'
+                ),
+                NativeToolReturnPart(
+                    tool_name='tool_search', tool_call_id='srv_1', content='search_chats', provider_name='anthropic'
+                ),
+                ToolCallPart(tool_name='search_chats', tool_call_id='call_1', args='{"query":"earlier"}'),
+            ]
+        ),
+        ModelRequest(parts=[ToolReturnPart(tool_name='search_chats', tool_call_id='call_1', content='Plan')]),
+    ]
+
+    reloaded = AGUIAdapter.load_messages(AGUIAdapter.dump_messages(original))
+
+    assert [[type(part).__name__ for part in message.parts] for message in reloaded] == expected_shape
+    _sync_load_bookkeeping(original, reloaded)
+    assert reloaded == original
+
+
+def test_load_builtin_tool_return_without_call_in_current_response() -> None:
+    """A native tool return whose call isn't in the response being built is added as before."""
+    builtin_id = 'pyd_ai_builtin|anthropic|srv_1'
+    messages: list[Message] = [
+        AssistantMessage(
+            id='msg_1', tool_calls=[ToolCall(id=builtin_id, function=FunctionCall(name='tool_search', arguments='{}'))]
+        ),
+        UserMessage(id='msg_2', content='Never mind.'),
+        ToolMessage(id='msg_3', content='late', tool_call_id=builtin_id),
+        AssistantMessage(id='msg_4', content='OK.'),
+        ToolMessage(id='msg_5', content='later', tool_call_id=builtin_id),
+    ]
+
+    reloaded = AGUIAdapter.load_messages(messages)
+
+    assert [[type(part).__name__ for part in message.parts] for message in reloaded] == snapshot(
+        [['NativeToolCallPart'], ['UserPromptPart'], ['NativeToolReturnPart', 'TextPart', 'NativeToolReturnPart']]
+    )
+
+
 def test_dump_load_roundtrip_failed_builtin_tool_return() -> None:
     original: list[ModelMessage] = [
         ModelResponse(

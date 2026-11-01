@@ -270,6 +270,22 @@ def _input_content_to_user_content(
     return converted
 
 
+def _add_native_tool_return(builder: MessagesBuilder, part: NativeToolReturnPart) -> None:
+    """Add a native tool return right after its call, where the provider put it.
+
+    An `AssistantMessage` carries all of a response's calls before the `ToolMessage`s that answer
+    them, so appending the return would land it after any function call that followed the native one.
+    Anthropic then rejects the `tool_use` that no longer ends the assistant turn.
+    """
+    last = builder.messages[-1] if builder.messages else None
+    if isinstance(last, ModelResponse):
+        for index, existing in enumerate(last.parts):
+            if isinstance(existing, NativeToolCallPart) and existing.tool_call_id == part.tool_call_id:
+                last.parts = [*last.parts[: index + 1], part, *last.parts[index + 1 :]]
+                return
+    builder.add(part)
+
+
 _messages_ta: TypeAdapter[list[Message]] = TypeAdapter(list[Message])
 
 
@@ -701,7 +717,8 @@ class AGUIAdapter(UIAdapter[RunAgentInput, Message, BaseEvent, AgentDepsT, Outpu
                     builtin_id = parse_builtin_tool_call_id(tool_call_id)
                     if builtin_id is not None:
                         provider_name, original_id = builtin_id
-                        builder.add(
+                        _add_native_tool_return(
+                            builder,
                             NativeToolReturnPart(
                                 tool_name=tool_name,
                                 content=content,
@@ -709,7 +726,7 @@ class AGUIAdapter(UIAdapter[RunAgentInput, Message, BaseEvent, AgentDepsT, Outpu
                                 provider_name=provider_name,
                                 tool_kind=tool_kind,
                                 outcome=outcome,
-                            )
+                            ),
                         )
                     else:
                         # The final `narrow_message_parts` pass parses the rehydrated content into a typed
