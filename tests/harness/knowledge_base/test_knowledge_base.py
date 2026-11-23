@@ -192,6 +192,12 @@ class TestInMemoryKnowledgeBase:
         with pytest.raises(ValueError, match='chunk_chars must be positive'):
             InMemoryKnowledgeBase(chunk_chars=0)
 
+    @pytest.mark.parametrize('document_id', ['chapter  1', 'chapter\n1', ' chapter', 'chapter '])
+    def test_a_document_id_a_search_would_show_differently_is_rejected(self, document_id: str) -> None:
+        """A search shows the id on one line, so an id that changes there could not be read back."""
+        with pytest.raises(ValueError, match='must be on one line'):
+            InMemoryKnowledgeBase([Document(document_id, 'alpha')])
+
 
 class TestSearchKnowledgeBase:
     async def test_renders_passages_with_sources_documents_and_metadata(self) -> None:
@@ -349,6 +355,16 @@ class TestReadDocument:
             _text(output)
             == f'Document: long\n\n{"x" * 10}\n[... the document continues; call read_document with offset=10]'
         )
+        assert output.metadata['document']['next_offset'] == 10
+
+    async def test_a_backend_that_stops_at_max_chars_still_gets_the_marker(self) -> None:
+        class Truncating(InMemoryKnowledgeBase):
+            async def read(self, document_id: str, *, max_chars: int, filter: FilterNode | None) -> Document | None:
+                document = await super().read(document_id, max_chars=max_chars, filter=filter)
+                return document and Document(document.document_id, document.text[:max_chars])
+
+        toolset = _toolset(Truncating([Document('long', 'x' * 30)]), max_document_chars=10)
+        output = await toolset.read_document(_ctx(), 'long')
         assert output.metadata['document']['next_offset'] == 10
 
     async def test_later_parts_are_read_by_offset(self) -> None:

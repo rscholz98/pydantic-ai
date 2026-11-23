@@ -191,7 +191,11 @@ class Passage:
     """The relevance score the backend assigned, on the backend's own scale: not comparable across backends."""
 
     document_id: str | None = None
-    """The id of the document the passage belongs to, which `read` takes; `None` when the backend can't read documents."""
+    """The id of the document the passage belongs to, which `read` takes; `None` when the backend can't read documents.
+
+    The model sees it on one line with whitespace collapsed, so an id `read` should open has no line
+    breaks and no leading, trailing or repeated whitespace.
+    """
 
     metadata: Mapping[str, object] = field(default_factory=dict[str, object])
     """The passage's metadata attributes."""
@@ -264,8 +268,8 @@ class ReadableKnowledgeBase(Protocol):
         `filter` is the run's search filter. Applying it here is what keeps a tenant-scoped agent from
         opening another tenant's document by id, so a backend must return `None` for a document whose
         metadata doesn't match, and should fail closed with `allows_read`: a document missing a field the
-        filter names, or whose metadata can't be read, is not returned. The text may stop after `max_chars` characters (one more lets the caller
-        see that it continues).
+        filter names, or whose metadata can't be read, is not returned. The text may stop after `max_chars` characters: the
+        caller asks for one more than it shows, which is how it sees that the document continues.
         """
         ...
 

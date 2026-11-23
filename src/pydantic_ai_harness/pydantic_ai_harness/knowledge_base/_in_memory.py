@@ -9,7 +9,15 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from pydantic_ai.exceptions import UserError
-from pydantic_ai_harness.knowledge_base._backend import Document, FilterNode, Passage, SearchMode, allows_read, matches
+from pydantic_ai_harness.knowledge_base._backend import (
+    Document,
+    FilterNode,
+    Passage,
+    SearchMode,
+    allows_read,
+    matches,
+    one_line,
+)
 
 _TOKEN = re.compile(r'\w+')
 _PARAGRAPH = re.compile(r'\n\s*\n')
@@ -77,8 +85,17 @@ class InMemoryKnowledgeBase:
         self.add(documents)
 
     def add(self, documents: Iterable[Document]) -> None:
-        """Add `documents`, replacing any already stored under the same `document_id`."""
+        """Add `documents`, replacing any already stored under the same `document_id`.
+
+        Raises:
+            ValueError: A `document_id` has a line break or leading, trailing or repeated whitespace. A
+                search shows the id on one line, so `read_document` could not open such a document.
+        """
         for document in documents:
+            if one_line(document.document_id) != document.document_id:
+                raise ValueError(
+                    f'document_id {document.document_id!r} must be on one line, without leading, trailing or repeated whitespace'
+                )
             self._documents[document.document_id] = document
         self._chunks = [
             _Chunk(document, text, Counter(tokens), len(tokens))

@@ -163,7 +163,8 @@ class KnowledgeBaseToolset(FunctionToolset[AgentDepsT]):
             raise ModelRetry(f'offset must be 0 or more, got {offset}.')
         backend = self._backend
         assert isinstance(backend, ReadableKnowledgeBase)
-        document = await backend.read(document_id, max_chars=offset + self._max_document_chars, filter=filter)
+        # One more than is shown, so a backend that stops at `max_chars` still reveals that the document continues.
+        document = await backend.read(document_id, max_chars=offset + self._max_document_chars + 1, filter=filter)
         if document is None:
             raise ModelRetry(f'No document with id {document_id!r}. Use an id from a search result.')
         if offset and offset >= len(document.text):
