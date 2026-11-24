@@ -327,6 +327,8 @@ KnowledgeBase(
     contents=None,  # what the knowledge base holds, for the tools and the instructions
     guidance=None,  # None = default instructions, '' = none, str = custom
     id='knowledge_base',  # durable-execution identity
+    description=None,  # replaces the default catalog entry under defer_loading
+    defer_loading=False,  # hide the tools and guidance until the model loads the capability
 )
 ```
 
@@ -446,7 +448,7 @@ agent = Agent.from_file('agent.yaml', custom_capability_types=[KnowledgeBase])
 `knowledge_base_id` is the Bedrock knowledge base id or the OpenAI vector store id. The Bedrock
 options (`region_name`, `reranking_model`, `fetch_results`) only apply to
 `backend: bedrock`. A spec takes a static `filter`, in shorthand or tree form; a callable filter, a custom client and an
-in-memory backend are Python-only.
+in-memory backend are Python-only. `description` and `defer_loading` work as on any capability.
 
 ## Telemetry
 

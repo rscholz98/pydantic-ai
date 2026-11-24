@@ -198,6 +198,13 @@ class TestInMemoryKnowledgeBase:
         with pytest.raises(ValueError, match='must be on one line'):
             InMemoryKnowledgeBase([Document(document_id, 'alpha')])
 
+    async def test_a_rejected_add_stores_nothing(self) -> None:
+        backend = InMemoryKnowledgeBase()
+        with pytest.raises(ValueError, match='must be on one line'):
+            backend.add([Document('first', 'alpha'), Document('second\nline', 'beta')])
+        assert await backend.read('first', max_chars=10, filter=None) is None
+        assert await backend.search('alpha', limit=5, filter=None) == []
+
 
 class TestSearchKnowledgeBase:
     async def test_renders_passages_with_sources_documents_and_metadata(self) -> None:

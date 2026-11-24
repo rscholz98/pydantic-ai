@@ -91,11 +91,14 @@ class InMemoryKnowledgeBase:
             ValueError: A `document_id` has a line break or leading, trailing or repeated whitespace. A
                 search shows the id on one line, so `read_knowledge_base_document` could not open such a document.
         """
-        for document in documents:
+        # Checked before anything is stored, so a rejected call leaves the knowledge base as it was.
+        added = list(documents)
+        for document in added:
             if one_line(document.document_id) != document.document_id:
                 raise ValueError(
                     f'document_id {document.document_id!r} must be on one line, without leading, trailing or repeated whitespace'
                 )
+        for document in added:
             self._documents[document.document_id] = document
         self._chunks = [
             _Chunk(document, text, Counter(tokens), len(tokens))
