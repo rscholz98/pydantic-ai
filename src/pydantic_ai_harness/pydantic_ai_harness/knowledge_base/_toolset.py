@@ -1,4 +1,4 @@
-"""Knowledge base toolset: the `search_knowledge_base` and `read_document` tools over any backend."""
+"""Knowledge base toolset: the `search_knowledge_base` and `read_knowledge_base_document` tools over any backend."""
 
 from __future__ import annotations
 
@@ -52,11 +52,11 @@ async def _defer_to_file_search(ctx: RunContext[AgentDepsT], tool_def: ToolDefin
 
 
 class KnowledgeBaseToolset(FunctionToolset[AgentDepsT]):
-    """Gives an agent `search_knowledge_base` over a knowledge base backend, and `read_document` where it reads.
+    """Gives an agent `search_knowledge_base` over a knowledge base backend, and `read_knowledge_base_document` where it reads.
 
     A search returns a `ToolReturn` whose `return_value` is the text the model sees and whose
     `metadata['results']` lists the passages as `KnowledgeBaseResult` records, so applications can
-    render citations without parsing the text. `read_document` returns a document in windows of
+    render citations without parsing the text. `read_knowledge_base_document` returns a document in windows of
     `max_document_chars`, and says which `offset` continues it. `KnowledgeBase` passes `operations`
     so that each backend call runs as one of its durable operations.
     """
@@ -72,7 +72,7 @@ class KnowledgeBaseToolset(FunctionToolset[AgentDepsT]):
         score_threshold: float | None = None,
         show_sources: bool = True,
         max_document_chars: int = 20_000,
-        description: str | None = None,
+        contents: str | None = None,
         defer_to_native: bool = False,
         id: str | None = None,
         operations: KnowledgeBaseOperations | None = None,
@@ -89,7 +89,7 @@ class KnowledgeBaseToolset(FunctionToolset[AgentDepsT]):
         self._operations = operations
         self._readable = is_readable(backend)
         search_description = (
-            f'{_SEARCH_DESCRIPTION} The knowledge base holds {description}.' if description else _SEARCH_DESCRIPTION
+            f'{_SEARCH_DESCRIPTION} The knowledge base holds {contents}.' if contents else _SEARCH_DESCRIPTION
         )
         self.add_function(
             self.search_knowledge_base,
@@ -98,7 +98,7 @@ class KnowledgeBaseToolset(FunctionToolset[AgentDepsT]):
             prepare=_defer_to_file_search if defer_to_native else None,
         )
         if self._readable:
-            self.add_function(self.read_document, name='read_document')
+            self.add_function(self.read_knowledge_base_document, name='read_knowledge_base_document')
 
     async def search_knowledge_base(self, ctx: RunContext[AgentDepsT], query: str) -> ToolReturn[str]:
         """Search the knowledge base for passages relevant to a query.
@@ -115,7 +115,9 @@ class KnowledgeBaseToolset(FunctionToolset[AgentDepsT]):
             return raise_retry(await self._operations.search(query, filter))
         return await self.search(query, filter)
 
-    async def read_document(self, ctx: RunContext[AgentDepsT], document_id: str, offset: int = 0) -> ToolReturn[str]:
+    async def read_knowledge_base_document(
+        self, ctx: RunContext[AgentDepsT], document_id: str, offset: int = 0
+    ) -> ToolReturn[str]:
         """Read a whole document from the knowledge base, by the `Document:` id a search result showed.
 
         Args:
@@ -173,7 +175,7 @@ class KnowledgeBaseToolset(FunctionToolset[AgentDepsT]):
         text = document.text[offset:end]
         next_offset = end if len(document.text) > end else None
         if next_offset is not None:
-            text += f'\n[... the document continues; call read_document with offset={next_offset}]'
+            text += f'\n[... the document continues; call read_knowledge_base_document with offset={next_offset}]'
         lines = [f'Document: {one_line(document.document_id)}']
         if self._show_sources and document.source:
             lines.append(f'Source: {one_line(document.source)}')

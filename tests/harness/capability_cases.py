@@ -1037,9 +1037,9 @@ CASES: dict[str, CapabilityCase] = {
         ),
         build=lambda _: KnowledgeBase(_KNOWLEDGE),
         calls=Calls(
-            (('search_knowledge_base', {'query': 'q'}), ('read_document', {'document_id': 'doc'})),
+            (('search_knowledge_base', {'query': 'q'}), ('read_knowledge_base_document', {'document_id': 'doc'})),
             lambda _: KnowledgeBase(KnowledgeBackend()),
-            durable_steps=('knowledge_base.search_knowledge_base', 'knowledge_base.read_document'),
+            durable_steps=('knowledge_base.search_knowledge_base', 'knowledge_base.read_knowledge_base_document'),
         ),
     ),
     'GitHub': CapabilityCase(

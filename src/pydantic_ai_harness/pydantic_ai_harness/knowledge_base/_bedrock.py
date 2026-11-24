@@ -21,36 +21,22 @@ External assumptions (verified 2026-10-30 against botocore 1.42.63 and the API r
   <https://docs.aws.amazon.com/bedrock/latest/userguide/rerank-supported.html>.
 - There is no API to read a whole document back, and a `Retrieve` filtered on
   `x-amz-bedrock-kb-source-uri` returns an incomplete, unordered set of a document's chunks (checked
-  live 2026-10-30: 20 of 31 or more, no `nextToken`). Reading a document therefore fetches its source
-  object from S3, for S3 data sources only.
-- Bedrock reads a source object's metadata from `<object key>.metadata.json` beside it, as
-  `{"metadataAttributes": {...}}` with plain values or typed `{"value": {"type": ..., "stringValue": ...}}`
-  entries, see <https://docs.aws.amazon.com/bedrock/latest/userguide/kb-ds-metadata.html>.
+  live 2026-10-30: 20 of 31 or more, no `nextToken`). This backend therefore only searches.
 """
 
 from __future__ import annotations
 
 import functools
-import json
-import secrets
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, TypeAlias
 
 import anyio.to_thread
 from typing_extensions import Unpack
 
 from pydantic_ai.exceptions import ModelRetry, UserError
-from pydantic_ai_harness.knowledge_base._backend import (
-    Document,
-    FilterNode,
-    FilterScalar,
-    Passage,
-    SearchMode,
-    allows_read,
-    one_line,
-)
+from pydantic_ai_harness.knowledge_base._backend import FilterNode, Passage, SearchMode, one_line
 
 try:
     import boto3
@@ -83,18 +69,6 @@ BEDROCK_MAX_NUMBER_OF_RESULTS = 100
 """Largest `numberOfResults` (and `numberOfRerankedResults`) the `Retrieve` API accepts."""
 
 _USER_AGENT = 'pydantic-ai-harness/knowledge-base'
-_DOCUMENT_ID_PREFIX = 'doc_'
-_MAX_REMEMBERED_DOCUMENTS = 10_000
-_TEXT_CONTENT_TYPES = frozenset({'application/json', 'application/xml', 'application/x-yaml', 'application/yaml'})
-_TEXT_SUFFIXES = ('.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.html', '.htm', '.xml', '.yaml', '.yml')
-_MISSING_OBJECT_CODES = frozenset({'NoSuchKey', '404', 'NotFound'})
-_RECOVERABLE_S3_CODES = frozenset({'SlowDown', 'InternalError', 'ServiceUnavailable', '503', '500'})
-
-SourceConverter: TypeAlias = Callable[[bytes, 'str | None', str], 'str | None']
-"""Turns a source object that isn't text, such as a PDF, into text: `(data, content_type, uri) -> text`.
-
-Return `None` to leave the document unreadable. It runs on a worker thread, so it may block.
-"""
 _SERVICE_METADATA_PREFIX = 'x-amz-bedrock-kb-'
 _NO_TEXT = '(no text content)'
 
@@ -121,19 +95,6 @@ class BedrockAgentRuntimeClient(Protocol):
 
     def retrieve(self, **kwargs: Unpack[RetrieveRequestTypeDef]) -> RetrieveResponseTypeDef:
         """Query the knowledge base; the `Retrieve` API."""
-        ...  # pragma: no cover
-
-
-@runtime_checkable
-class _Readable(Protocol):
-    def read(self) -> bytes: ...
-
-
-class S3Client(Protocol):
-    """The one call `BedrockKnowledgeBase` makes on a boto3 `s3` client to read source documents."""
-
-    def get_object(self, *, Bucket: str, Key: str) -> Mapping[str, object]:
-        """Fetch an object; the response's `Body` has a `read()` method and `ContentType` names its type."""
         ...  # pragma: no cover
 
 
@@ -178,34 +139,6 @@ class BedrockKnowledgeBase:
     client: BedrockAgentRuntimeClient | None = field(default=None, repr=False)
     """A boto3 `bedrock-agent-runtime` client; when `None`, one is built from `region_name` and the ambient AWS configuration."""
 
-    read_source_documents: bool = False
-    """Let the agent read a whole document, by fetching the source object a passage came from in S3.
-
-    Bedrock has no API to read a document back, so this reads the knowledge base's S3 data source
-    directly, which needs `s3:GetObject` on it. Passages from S3 then carry an opaque document id
-    (other data sources stay search-only). Before fetching, the run's filter is checked against the
-    attributes in the object's `.metadata.json` sidecar; with a filter set, an object without a
-    sidecar is not read. Text objects are returned as they are; other content, such as PDFs, goes to
-    `convert`, and without one reads as unavailable.
-
-    Document ids map to S3 locations inside this backend instance, in memory: an id from an earlier
-    process, or from another replica behind a load balancer, reads as unknown, and the model searches
-    again.
-    """
-
-    convert: SourceConverter | None = field(default=None, repr=False)
-    """Turns a source object that isn't text into text, for `read_source_documents`.
-
-    For example a function that extracts a PDF's text with `pypdf`, or one that reads text your
-    ingestion pipeline already extracted. Without it, only text objects can be read.
-    """
-
-    s3_client: S3Client | None = field(default=None, repr=False)
-    """A boto3 `s3` client for `read_source_documents`; when `None`, one is built like `client`."""
-
-    _documents: dict[str, str] = field(default_factory=dict[str, str], init=False, repr=False, compare=False)
-    _ids: dict[str, str] = field(default_factory=dict[str, str], init=False, repr=False, compare=False)
-
     def __post_init__(self) -> None:
         """Validate configuration against the `Retrieve` API's documented bounds."""
         if not self.knowledge_base_id:
@@ -219,13 +152,6 @@ class BedrockKnowledgeBase:
                 )
         if self.retrieval_configuration is not None and self.reranking_model is not None:
             raise ValueError('retrieval_configuration replaces reranking_model; set one or the other.')
-        if self.convert is not None and not self.read_source_documents:
-            raise ValueError('convert needs read_source_documents=True')
-
-    @property
-    def can_read(self) -> bool:
-        """Whether this backend reads documents: only with `read_source_documents`."""
-        return self.read_source_documents
 
     @cached_property
     def _client_and_region(self) -> tuple[BedrockAgentRuntimeClient, str | None]:
@@ -243,13 +169,6 @@ class BedrockKnowledgeBase:
                 'or pass a configured `client`.'
             ) from exc
         return client, client.meta.region_name
-
-    @cached_property
-    def _s3(self) -> S3Client:
-        if self.s3_client is not None:
-            return self.s3_client
-        session = boto3.Session(region_name=self.region_name)
-        return session.client('s3', config=Config(user_agent_extra=_USER_AGENT))  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # boto3-stubs leave other services' overloads unknown
 
     @property
     def reranking_model_arn(self) -> str | None:
@@ -299,84 +218,10 @@ class BedrockKnowledgeBase:
             raise ModelRetry(_retry_message('Knowledge base search failed', error)) from error
         except (BotocoreConnectionError, ReadTimeoutError) as error:
             raise ModelRetry(_retry_message('Knowledge base search failed', error)) from error
-        passages = [self._passage(result) for result in response['retrievalResults']]
+        passages = [_to_passage(result) for result in response['retrievalResults']]
         if score_threshold is None:
             return passages
         return [passage for passage in passages if passage.score is None or passage.score >= score_threshold]
-
-    def _passage(self, result: KnowledgeBaseRetrievalResultTypeDef) -> Passage:
-        passage = _to_passage(result)
-        location = result.get('location')
-        s3 = location.get('s3Location') if location is not None else None
-        uri = s3.get('uri') if s3 is not None else None
-        if not self.read_source_documents or uri is None or not uri.startswith('s3://'):
-            return passage
-        return Passage(passage.text, passage.source, passage.score, self._remember(uri), passage.metadata)
-
-    def _remember(self, uri: str) -> str:
-        """A random id for `uri`, so the id carries no storage path and can't be derived; kept for `read`."""
-        document_id = self._ids.pop(uri, None) or _DOCUMENT_ID_PREFIX + secrets.token_hex(12)
-        self._documents.pop(document_id, None)
-        self._documents[document_id] = uri
-        self._ids[uri] = document_id
-        while len(self._documents) > _MAX_REMEMBERED_DOCUMENTS:
-            forgotten = next(iter(self._documents))
-            del self._ids[self._documents.pop(forgotten)]
-        return document_id
-
-    async def read(self, document_id: str, *, max_chars: int, filter: FilterNode | None) -> Document | None:
-        """Read the source object behind a passage from S3, if its sidecar's attributes match `filter`.
-
-        Returns `None` for an unknown id, a missing object, an object outside the filter, and content
-        that is neither text nor turned into text by `convert`. The filter check fails closed: a missing
-        or unreadable sidecar, or one without a field the filter names, blocks a filtered read. `max_chars` is not applied here: the object is read whole.
-        """
-        uri = self._documents.get(document_id)
-        if uri is None:
-            return None
-        bucket, _, key = uri.removeprefix('s3://').partition('/')
-        sidecar = await self._get(bucket, f'{key}.metadata.json')
-        attributes = _sidecar_attributes(sidecar[0]) if sidecar is not None else {}
-        if not allows_read(attributes, filter):
-            return None
-        source = await self._get(bucket, key)
-        if source is None:
-            return None
-        data, content_type = source
-        text = await self._text(data, content_type, key, uri)
-        if text is None:
-            return None
-        return Document(document_id=document_id, text=text, source=uri, metadata=attributes)
-
-    async def _get(self, bucket: str, key: str) -> tuple[bytes, str | None] | None:
-        """Fetch one object's bytes and content type, or `None` when it doesn't exist."""
-
-        def get() -> tuple[bytes, str | None]:
-            response = self._s3.get_object(Bucket=bucket, Key=key)
-            body = response['Body']
-            assert isinstance(body, _Readable)
-            content_type = response.get('ContentType')
-            return body.read(), content_type if isinstance(content_type, str) else None
-
-        try:
-            return await anyio.to_thread.run_sync(get)
-        except ClientError as error:
-            code = error.response.get('Error', {}).get('Code')
-            if code in _MISSING_OBJECT_CODES:
-                return None
-            if code in _RECOVERABLE_S3_CODES:
-                raise ModelRetry(_retry_message('Reading the document failed', error)) from error
-            raise
-        except (BotocoreConnectionError, ReadTimeoutError) as error:
-            raise ModelRetry(_retry_message('Reading the document failed', error)) from error
-
-    async def _text(self, data: bytes, content_type: str | None, key: str, uri: str) -> str | None:
-        media_type = (content_type or '').split(';')[0].strip().lower()
-        if media_type.startswith('text/') or media_type in _TEXT_CONTENT_TYPES or key.lower().endswith(_TEXT_SUFFIXES):
-            return data.decode('utf-8', errors='replace')
-        if self.convert is None:
-            return None
-        return await anyio.to_thread.run_sync(self.convert, data, content_type, uri)
 
     def _configuration(
         self, limit: int, filter: FilterNode | None, mode: SearchMode | None
@@ -523,35 +368,6 @@ def _body(content: RetrievalResultContentTypeDef) -> str:
     transcription = audio.get('transcription') if audio is not None else None
     summary = video.get('summary') if video is not None else None
     return transcription or summary or _NO_TEXT
-
-
-def _sidecar_attributes(data: bytes) -> dict[str, FilterScalar]:
-    """The attributes in a Bedrock `.metadata.json` sidecar, plain or in the typed `{"value": {...}}` form."""
-    try:
-        parsed = json.loads(data)
-    except ValueError:
-        return {}
-    # The sidecar is untyped JSON: narrow each level with isinstance before using it.
-    raw = parsed.get('metadataAttributes') if isinstance(parsed, dict) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-    if not isinstance(raw, dict):
-        return {}
-    attributes: dict[str, FilterScalar] = {}
-    for key, value in raw.items():  # pyright: ignore[reportUnknownVariableType]
-        scalar = _attribute_value(value)  # pyright: ignore[reportUnknownArgumentType]
-        if isinstance(key, str) and scalar is not None:
-            attributes[key] = scalar
-    return attributes
-
-
-def _attribute_value(value: object) -> FilterScalar | None:
-    if isinstance(value, str | int | float | bool):
-        return value
-    if isinstance(value, dict) and isinstance(inner := value.get('value'), dict):  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-        for name in ('stringValue', 'numberValue', 'booleanValue'):
-            found = inner.get(name)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-            if isinstance(found, str | int | float | bool):
-                return found
-    return None
 
 
 def _retry_message(what: str, error: Exception) -> str:

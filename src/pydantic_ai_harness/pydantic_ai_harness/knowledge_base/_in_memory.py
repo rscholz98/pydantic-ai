@@ -70,7 +70,7 @@ class InMemoryKnowledgeBase:
     """A knowledge base held in process memory, searched with BM25 keyword ranking.
 
     Documents are split into chunks of whole paragraphs, and a search ranks the chunks of the documents
-    that match the filter. It reads whole documents too, so the agent gets `read_document`. Nothing is
+    that match the filter. It reads whole documents too, so the agent gets `read_knowledge_base_document`. Nothing is
     persisted and there are no embeddings: use it for tests, examples, and small corpora that ship with
     the application, and a hosted backend for anything that has to scale or match by meaning.
     """
@@ -89,7 +89,7 @@ class InMemoryKnowledgeBase:
 
         Raises:
             ValueError: A `document_id` has a line break or leading, trailing or repeated whitespace. A
-                search shows the id on one line, so `read_document` could not open such a document.
+                search shows the id on one line, so `read_knowledge_base_document` could not open such a document.
         """
         for document in documents:
             if one_line(document.document_id) != document.document_id:

@@ -390,13 +390,13 @@ agent = Agent('test', capabilities=[CurrentTime(timezone='Europe/Amsterdam')])
 
 Retrieval from a corpus the application provides, over a pluggable backend. Tools:
 `search_knowledge_base(query)` (passages under `Source:` / `Document:` lines, citations in
-`ToolReturn.metadata['results']`) and `read_document(document_id)` when the backend can read
+`ToolReturn.metadata['results']`) and `read_knowledge_base_document(document_id)` when the backend can read
 documents. Backends live in `pydantic_ai_harness.knowledge_base`:
 
 | Backend | Needs | Reads documents | Native search |
 |---|---|---|---|
 | `InMemoryKnowledgeBase(documents)` | nothing | yes | no |
-| `BedrockKnowledgeBase(knowledge_base_id, region_name=...)` | `pydantic-ai-slim[bedrock]` | opt-in (`read_source_documents=True`, S3 sources) | no |
+| `BedrockKnowledgeBase(knowledge_base_id, region_name=...)` | `pydantic-ai-slim[bedrock]` | no | no |
 | `OpenAIVectorStore(vector_store_id)` | `pydantic-ai-slim[openai]` | yes | OpenAI Responses |
 
 ```python
@@ -412,7 +412,7 @@ agent = Agent(
         KnowledgeBase(
             InMemoryKnowledgeBase([Document('returns', 'Returns within 30 days.', metadata={'tenant_id': 'acme'})]),
             filter=lambda ctx: {'tenant_id': ctx.deps},
-            description='the shop policies',
+            contents='the shop policies',
         )
     ],
 )
@@ -425,14 +425,14 @@ combined by `{'operator': 'AND' | 'OR' | 'NOT', 'conditions': [...]}`; or a sync
 of `RunContext` returning one per run), `require_filter=False` (fail instead of searching unfiltered when the
 filter resolves to nothing), `search_mode=None` (`'semantic'`, `'keyword'`, `'hybrid'`),
 `score_threshold=None` (backend's scale), `show_sources=True`, `max_document_chars=20_000` (per
-`read_document` call; the model pages on with `offset`), `native=False`, `description=None`,
+`read_knowledge_base_document` call; the model pages on with `offset`), `native=False`, `contents=None`,
 `guidance=None` (`''` disables the instructions), `id='knowledge_base'`. Bedrock options sit on the
 backend: `reranking_model`, `fetch_results`, `retrieval_configuration` (raw `retrievalConfiguration`;
 the capability's filter is still combined into it, `search_mode` must stay unset), `client`.
 
 Gotchas:
 - A backend is any object with `async search(query, *, limit, filter, mode=None,
-  score_threshold=None)`; add `async read(document_id, *, max_chars, filter)` for `read_document`.
+  score_threshold=None)`; add `async read(document_id, *, max_chars, filter)` for `read_knowledge_base_document`.
   The filter arrives as a checked tree (`FilterNode`); raise `UserError` for what you can't apply. `read` must return `None` for a document outside the
   filter, or a tenant-scoped agent can open other tenants' documents by id (`matches` helps).
   Backends raise `ModelRetry` for transient failures.
@@ -441,9 +441,7 @@ Gotchas:
   `filter`, since the native tool can't scope a search, and native results don't land in
   `metadata['results']`.
 - `InMemoryKnowledgeBase` is keyword BM25 without stemming or embeddings: tests and small corpora.
-- Bedrock has no document read API: `read_source_documents=True` reads the S3 source object instead (needs
-  `s3:GetObject`; checks the `.metadata.json` sidecar against the filter first; non-text such as PDFs needs
-  `convert=(data, content_type, uri) -> str | None`; document ids are opaque and process-local). Bedrock has no keyword mode; Bedrock and OpenAI have no `NOT` (negate
+- Bedrock has no document read API, so `BedrockKnowledgeBase` only searches. Bedrock has no keyword mode; Bedrock and OpenAI have no `NOT` (negate
   the comparisons instead); OpenAI is semantic only. A missing field matches `!=` and `not in` only,
   as on Bedrock. Unsupported operators, modes and thresholds raise rather than being ignored.
 - Two instances share the default `id` and raise when they differ; a second knowledge base needs its

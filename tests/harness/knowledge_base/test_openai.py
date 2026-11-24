@@ -313,10 +313,9 @@ class TestConfiguration:
         assert capability.backend == OpenAIVectorStore('vs_1')
         assert capability.native is True
 
-    @pytest.mark.parametrize('options', [{'region_name': 'eu-central-1'}, {'read_source_documents': True}])
-    def test_from_spec_rejects_bedrock_options_for_openai(self, options: dict[str, Any]) -> None:
+    def test_from_spec_rejects_bedrock_options_for_openai(self) -> None:
         with pytest.raises(ValueError, match='only apply to backend="bedrock"'):
-            KnowledgeBase[None].from_spec(backend='openai', knowledge_base_id='vs_1', **options)
+            KnowledgeBase[None].from_spec(backend='openai', knowledge_base_id='vs_1', region_name='eu-central-1')
 
 
 class TestFailClosedRead:

@@ -47,7 +47,7 @@ class OpenAIVectorStore:
 
     Upload and attribute files with the OpenAI API; this backend only queries the store. Searches
     return at most 50 passages, the API maximum. A file's id is its document id, so the agent can open
-    a whole file with `read_document`.
+    a whole file with `read_knowledge_base_document`.
 
     With `KnowledgeBase(native=True)`, OpenAI Responses models search the store with the provider's
     native `file_search` tool instead, and every other model uses this backend's search.

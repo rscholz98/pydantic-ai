@@ -260,7 +260,7 @@ class KnowledgeBaseBackend(Protocol):
 
 @runtime_checkable
 class ReadableKnowledgeBase(Protocol):
-    """A backend that can also return a whole document by id, which adds the `read_document` tool."""
+    """A backend that can also return a whole document by id, which adds the `read_knowledge_base_document` tool."""
 
     async def read(self, document_id: str, *, max_chars: int, filter: FilterNode | None) -> Document | None:
         """Return the document, or `None` when there is none with that id or it doesn't match `filter`.
@@ -275,12 +275,8 @@ class ReadableKnowledgeBase(Protocol):
 
 
 def is_readable(backend: object) -> bool:
-    """Whether `backend` reads documents: it has `read`, and doesn't turn reading off with `can_read = False`.
-
-    A backend whose reading depends on its configuration, like `BedrockKnowledgeBase` with
-    `read_source_documents`, exposes `can_read`; one that always reads needs nothing beyond `read`.
-    """
-    return isinstance(backend, ReadableKnowledgeBase) and getattr(backend, 'can_read', True) is not False
+    """Whether `backend` reads documents: it has a `read` method."""
+    return isinstance(backend, ReadableKnowledgeBase)
 
 
 @runtime_checkable

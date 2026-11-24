@@ -7,7 +7,7 @@ description: "Give a Pydantic AI agent retrieval from a knowledge base your appl
 
 `KnowledgeBase` gives an agent retrieval from a knowledge base: a corpus of documents your
 application provides, such as manuals, policies or support articles. The agent searches it with
-`search_knowledge_base`, opens whole documents with `read_document` where the backend can return
+`search_knowledge_base`, opens whole documents with `read_knowledge_base_document` where the backend can return
 them, and cites the passages it used. Where the documents live and how a search matches them is
 the job of a pluggable backend: an in-memory index, an Amazon Bedrock Knowledge Base, an OpenAI
 vector store, or your own.
@@ -68,7 +68,7 @@ docs = InMemoryKnowledgeBase(
 
 agent = Agent(
     '{{ anthropic:medium }}',
-    capabilities=[KnowledgeBase(docs, description='the shop policies')],
+    capabilities=[KnowledgeBase(docs, contents='the shop policies')],
 )
 
 result = agent.run_sync('Can I still return something I got three weeks ago?')
@@ -82,7 +82,7 @@ Swapping the backend changes where the documents live, not how the agent uses th
 | Backend | What it searches | Reads documents | Native search |
 |---|---|---|---|
 | `InMemoryKnowledgeBase(documents)` | Documents held in process, BM25 keyword ranking over paragraph chunks | Yes | No |
-| `BedrockKnowledgeBase(knowledge_base_id)` | An [Amazon Bedrock Knowledge Base](https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base.html), with hybrid search and reranking | Opt-in, from the S3 data source | No |
+| `BedrockKnowledgeBase(knowledge_base_id)` | An [Amazon Bedrock Knowledge Base](https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base.html), with hybrid search and reranking | No | No |
 | `OpenAIVectorStore(vector_store_id)` | An [OpenAI vector store](https://platform.openai.com/docs/guides/retrieval) | Yes | On OpenAI Responses models |
 
 `InMemoryKnowledgeBase` keeps nothing on disk and has no embeddings, so it matches words, not
@@ -129,37 +129,9 @@ later); the capability's `search_mode` must then stay unset. The capability's me
 still applied on top of it, combined with any filter it carries.
 
 Bedrock has no API to read a document back, and a document's chunks can't be reassembled reliably,
-so reading is opt-in and goes to the source. With `read_source_documents=True`, passages from an S3
-data source get an opaque document id, and `read_document` fetches the source object from S3, which
-needs `s3:GetObject` on the bucket. Before fetching, the run's filter is checked against the
-attributes in the object's `.metadata.json` sidecar (Bedrock's own metadata convention). The check
-fails closed: with a filter set, an object whose sidecar is missing, unreadable, or lacks a field the
-filter names is not read. Text objects are returned as they are. Other
-content, such as PDFs, goes to `convert`, a function from the object's bytes, content type and URI
-to text, and without one reads as unavailable, so the model works from the passages:
-
-```python
-from io import BytesIO
-
-from pypdf import PdfReader
-
-from pydantic_ai_harness.knowledge_base import BedrockKnowledgeBase
-
-
-def pdf_text(data: bytes, content_type: str | None, uri: str) -> str | None:
-    if content_type != 'application/pdf':
-        return None
-    return '\n\n'.join(page.extract_text() or '' for page in PdfReader(BytesIO(data)).pages)
-
-
-backend = BedrockKnowledgeBase('KB123', region_name='eu-central-1', read_source_documents=True, convert=pdf_text)
-```
-
-Other data sources (web, Confluence, SharePoint, Salesforce, custom) stay search-only. The document
-ids map to S3 locations inside the backend, in memory, so an id carries no storage path; an id
-from another process or replica reads as unknown, and the model searches again. A passage's
-`Source:` line still shows the object's S3 URI; set `show_sources=False` to keep storage paths
-away from the model.
+so this backend only searches: the agent gets `search_knowledge_base` and no
+`read_knowledge_base_document`. A passage's `Source:` line shows where it came from, such as the
+object's S3 URI; set `show_sources=False` to keep storage paths away from the model.
 
 Throttling, quota, internal, dependency, gateway and model-not-ready errors and network failures
 become retry prompts; access, resource and validation errors raise.
@@ -178,7 +150,7 @@ agent = Agent(
 ```
 
 Upload and attribute files with the OpenAI API; the backend only queries the store. A file's id is
-its document id, so `read_document` opens the whole file. Searches return at most 50 passages, the
+its document id, so `read_knowledge_base_document` opens the whole file. Searches return at most 50 passages, the
 API maximum. The search is semantic, and `score_threshold` (0 to 1) is applied by the API to its
 reranked scores, which vary slightly between identical calls, so leave some margin. The
 default client reads `OPENAI_API_KEY`; pass `client=AsyncOpenAI(...)` to configure it. Rate limits,
@@ -190,7 +162,7 @@ With `native=True` and a backend that a model provider can also search itself (`
 models that support it search the index with the provider's native
 [`FileSearchTool`](../native-tools.md#file-search-tool), and every
 other model uses `search_knowledge_base` as usual. One configuration then works on any model and
-uses the provider's own search where it can. `read_document` stays a local tool either way.
+uses the provider's own search where it can. `read_knowledge_base_document` stays a local tool either way.
 
 The native tool uses the provider's own search settings and has no metadata filter, so
 `native=True` can't be combined with `filter`, `search_mode` or `score_threshold`: a native search
@@ -205,7 +177,7 @@ manage the files. `KnowledgeBase` is for an index the application owns, searched
 | Tool | Purpose |
 |---|---|
 | `search_knowledge_base` | Search for passages relevant to a query and return the best `number_of_results`, each with its source and, where the backend reads documents, its document id. |
-| `read_document` | Return a document by the id a search showed, `max_document_chars` at a time from an `offset`, if it matches the run's filter. Only offered when the backend can read documents (in-memory, OpenAI, and Bedrock with `read_source_documents`). |
+| `read_knowledge_base_document` | Return a document by the id a search showed, `max_document_chars` at a time from an `offset`, if it matches the run's filter. Only offered when the backend can read documents (in-memory and OpenAI). |
 
 Each passage is rendered under a `Source:` line with its score when the backend reports one, and a
 `Document:` line when it can be opened. A document longer than `max_document_chars` ends with a
@@ -277,7 +249,7 @@ A document without the field matches the negative comparisons (`!=`, `not in`) a
 is how Bedrock evaluates them too. Each backend translates the tree to its own filter syntax and
 raises `UserError` for what it can't apply rather than searching without it: Bedrock and OpenAI have
 no `NOT`, so negate the comparisons there instead. A static filter's shape is checked when the
-capability is built. `read_document` applies the
+capability is built. `read_knowledge_base_document` applies the
 same filter, more strictly: a document missing a field the filter names reads as missing too, even
 when the model knows its id. The filter
 is resolved before the backend call, so under durable execution a recovered run replays the same
@@ -288,7 +260,7 @@ scoped request.
 The search tool returns a
 [`ToolReturn`](../tools-advanced.md#advanced-tool-returns):
 `return_value` carries the text the model sees, and `metadata['results']` carries each passage as a
-`KnowledgeBaseResult` (`source`, `score`, `document_id`, `metadata`). `read_document` puts the
+`KnowledgeBaseResult` (`source`, `score`, `document_id`, `metadata`). `read_knowledge_base_document` puts the
 document's id, source, metadata, `offset` and `next_offset` (`None` once it is complete) under
 `metadata['document']`. Metadata is
 never sent to the model; read it from the [`ToolReturnPart`][pydantic_ai.messages.ToolReturnPart] in the message history to render
@@ -325,13 +297,14 @@ The capability adds short guidance to the system prompt: search before answering
 knowledge base could cover, base the answer on the passages and cite their sources, phrase queries
 as statements or keyword phrases, resolve references to earlier turns first, run separate searches
 for unrelated questions, open a whole document when a passage is not enough (with a readable
-backend), and say so when nothing relevant comes back. `description` is woven in, so the model
+backend), treat passages and documents as untrusted data, and say so when nothing relevant comes back. `contents` is woven in, so the model
 knows what the knowledge base holds. Replace it with `guidance='...'`, or set `guidance=''` to
 contribute no instructions.
 
 With [`defer_loading=True`](../capabilities/on-demand.md) the model sees a
 one-line catalog entry instead ("Search a knowledge base of ... for passages before answering
-questions it could cover."), and the tools and guidance arrive once it calls `load_capability`.
+questions it could cover."), and the tools and guidance arrive once it calls `load_capability`. Set
+`description` to replace that entry.
 
 ## Configuration
 
@@ -349,9 +322,9 @@ KnowledgeBase(
     search_mode=None,  # 'semantic', 'keyword' or 'hybrid'; None for the backend's default
     score_threshold=None,  # drop passages scoring below this, on the backend's scale
     show_sources=True,  # Source: lines in the text; off keeps provenance in metadata only
-    max_document_chars=20_000,  # how much of a document one read_document call returns
+    max_document_chars=20_000,  # how much of a document one read_knowledge_base_document call returns
     native=False,  # native FileSearchTool where the backend and model allow it
-    description=None,  # what the knowledge base holds, for the tools and the instructions
+    contents=None,  # what the knowledge base holds, for the tools and the instructions
     guidance=None,  # None = default instructions, '' = none, str = custom
     id='knowledge_base',  # durable-execution identity
 )
@@ -367,7 +340,7 @@ from 0 to 1, in-memory BM25 unbounded.
 ## Your own backend
 
 Any object with an async `search` method is a backend. Add an async `read` method to get
-`read_document` (and a `can_read` attribute if reading depends on configuration), and
+`read_knowledge_base_document`, and
 `file_search_tool` to offer native search:
 
 ```python
@@ -423,7 +396,7 @@ from pydantic_ai_harness.knowledge_base import BedrockKnowledgeBase
 agent = Agent(
     '{{ bedrock:medium }}',
     capabilities=[
-        KnowledgeBase(BedrockKnowledgeBase('KB123', region_name='eu-central-1'), description='product manuals'),
+        KnowledgeBase(BedrockKnowledgeBase('KB123', region_name='eu-central-1'), contents='product manuals'),
         PrefixTools(
             wrapped=KnowledgeBase(
                 BedrockKnowledgeBase('KB456', region_name='eu-central-1'), guidance='', id='policies_knowledge_base'
@@ -471,7 +444,7 @@ agent = Agent.from_file('agent.yaml', custom_capability_types=[KnowledgeBase])
 ```
 
 `knowledge_base_id` is the Bedrock knowledge base id or the OpenAI vector store id. The Bedrock
-options (`region_name`, `reranking_model`, `fetch_results`, `read_source_documents`) only apply to
+options (`region_name`, `reranking_model`, `fetch_results`) only apply to
 `backend: bedrock`. A spec takes a static `filter`, in shorthand or tree form; a callable filter, a custom client and an
 in-memory backend are Python-only.
 

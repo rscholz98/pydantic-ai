@@ -306,7 +306,7 @@ class TestSearchKnowledgeBase:
 
     async def test_tool_description_mentions_what_the_knowledge_base_holds(self) -> None:
         plain = await _toolset(_SearchOnly()).get_tools(_ctx())
-        described = await _toolset(_SearchOnly(), description='product manuals').get_tools(_ctx())
+        described = await _toolset(_SearchOnly(), contents='product manuals').get_tools(_ctx())
         assert list(plain) == ['search_knowledge_base']
         assert plain['search_knowledge_base'].tool_def.description == (
             'Search the knowledge base for passages relevant to a query.'
@@ -321,7 +321,7 @@ class TestToolsetOnItsOwn:
         toolset = KnowledgeBaseToolset[object](InMemoryKnowledgeBase(_DOCUMENTS), number_of_results=1)
         found = await toolset.search_knowledge_base(_ctx(), 'shipping business days')
         assert [record['document_id'] for record in found.metadata['results']] == ['shipping']
-        read = await toolset.read_document(_ctx(), 'shipping')
+        read = await toolset.read_knowledge_base_document(_ctx(), 'shipping')
         assert _text(read).endswith('Orders ship within two business days.')
 
 
@@ -329,12 +329,12 @@ class TestReadDocument:
     async def test_tool_is_only_offered_by_readable_backends(self) -> None:
         assert list(await _toolset(InMemoryKnowledgeBase()).get_tools(_ctx())) == [
             'search_knowledge_base',
-            'read_document',
+            'read_knowledge_base_document',
         ]
         assert list(await _toolset(_SearchOnly()).get_tools(_ctx())) == ['search_knowledge_base']
 
     async def test_returns_the_document_with_its_source(self) -> None:
-        output = await _toolset(InMemoryKnowledgeBase(_DOCUMENTS)).read_document(_ctx(), 'shipping')
+        output = await _toolset(InMemoryKnowledgeBase(_DOCUMENTS)).read_knowledge_base_document(_ctx(), 'shipping')
         assert _text(output) == (
             'Document: shipping\nSource: https://shop.example/shipping\n\nOrders ship within two business days.'
         )
@@ -350,10 +350,12 @@ class TestReadDocument:
 
     async def test_long_document_is_cut_with_a_marker(self) -> None:
         backend = InMemoryKnowledgeBase([Document('long', 'x' * 30)])
-        output = await _toolset(backend, max_document_chars=10, show_sources=False).read_document(_ctx(), 'long')
+        output = await _toolset(backend, max_document_chars=10, show_sources=False).read_knowledge_base_document(
+            _ctx(), 'long'
+        )
         assert (
             _text(output)
-            == f'Document: long\n\n{"x" * 10}\n[... the document continues; call read_document with offset=10]'
+            == f'Document: long\n\n{"x" * 10}\n[... the document continues; call read_knowledge_base_document with offset=10]'
         )
         assert output.metadata['document']['next_offset'] == 10
 
@@ -364,17 +366,17 @@ class TestReadDocument:
                 return document and Document(document.document_id, document.text[:max_chars])
 
         toolset = _toolset(Truncating([Document('long', 'x' * 30)]), max_document_chars=10)
-        output = await toolset.read_document(_ctx(), 'long')
+        output = await toolset.read_knowledge_base_document(_ctx(), 'long')
         assert output.metadata['document']['next_offset'] == 10
 
     async def test_later_parts_are_read_by_offset(self) -> None:
         backend = InMemoryKnowledgeBase([Document('long', 'a' * 10 + 'b' * 10 + 'c' * 5)])
         toolset = _toolset(backend, max_document_chars=10, show_sources=False)
-        second = await toolset.read_document(_ctx(), 'long', offset=10)
+        second = await toolset.read_knowledge_base_document(_ctx(), 'long', offset=10)
         assert _text(second) == (
-            f'Document: long\nFrom character: 10\n\n{"b" * 10}\n[... the document continues; call read_document with offset=20]'
+            f'Document: long\nFrom character: 10\n\n{"b" * 10}\n[... the document continues; call read_knowledge_base_document with offset=20]'
         )
-        last = await toolset.read_document(_ctx(), 'long', offset=20)
+        last = await toolset.read_knowledge_base_document(_ctx(), 'long', offset=20)
         assert _text(last) == f'Document: long\nFrom character: 20\n\n{"c" * 5}'
         assert (last.metadata['document']['offset'], last.metadata['document']['next_offset']) == (20, None)
 
@@ -382,7 +384,7 @@ class TestReadDocument:
     async def test_bad_offsets_ask_the_model_to_retry(self, offset: int, message: str) -> None:
         toolset = _toolset(InMemoryKnowledgeBase([Document('short', 'x' * 25)]))
         with pytest.raises(ModelRetry, match=message):
-            await toolset.read_document(_ctx(), 'short', offset=offset)
+            await toolset.read_knowledge_base_document(_ctx(), 'short', offset=offset)
 
     async def test_document_outside_the_run_filter_reads_as_missing(self) -> None:
         """A tenant-scoped agent can't open another tenant's document by guessing its id."""
@@ -391,13 +393,15 @@ class TestReadDocument:
             return {'tenant_id': str(ctx.deps)}
 
         toolset = _toolset(InMemoryKnowledgeBase(_DOCUMENTS), filter=tenant)
-        assert _text(await toolset.read_document(_ctx('acme'), 'returns')).startswith('Document: returns')
+        assert _text(await toolset.read_knowledge_base_document(_ctx('acme'), 'returns')).startswith(
+            'Document: returns'
+        )
         with pytest.raises(ModelRetry, match="No document with id 'other-returns'"):
-            await toolset.read_document(_ctx('acme'), 'other-returns')
+            await toolset.read_knowledge_base_document(_ctx('acme'), 'other-returns')
 
     async def test_unknown_document_asks_the_model_to_retry(self) -> None:
         with pytest.raises(ModelRetry, match="No document with id 'nope'"):
-            await _toolset(InMemoryKnowledgeBase()).read_document(_ctx(), 'nope')
+            await _toolset(InMemoryKnowledgeBase()).read_knowledge_base_document(_ctx(), 'nope')
 
 
 class TestKnowledgeBase:
@@ -426,12 +430,13 @@ class TestKnowledgeBase:
         with pytest.raises(ValueError, match="Unknown comparison operator '~'"):
             KnowledgeBase[None](_SearchOnly(), filter={'field': 'year', 'operator': '~', 'value': 1})
 
-    def test_instructions_follow_the_backend_and_description(self) -> None:
+    def test_instructions_follow_the_backend_and_contents(self) -> None:
         searching = KnowledgeBase[None](_SearchOnly()).get_instructions()
-        reading = KnowledgeBase[None](InMemoryKnowledgeBase(), description='manuals').get_instructions()
+        reading = KnowledgeBase[None](InMemoryKnowledgeBase(), contents='manuals').get_instructions()
         assert isinstance(searching, str) and isinstance(reading, str)
-        assert 'search_knowledge_base' in searching and 'read_document' not in searching
-        assert 'a knowledge base of manuals' in reading and 'read_document' in reading
+        assert 'search_knowledge_base' in searching and 'read_knowledge_base_document' not in searching
+        assert 'a knowledge base of manuals' in reading and 'read_knowledge_base_document' in reading
+        assert 'untrusted data' in searching
 
     def test_custom_and_empty_guidance(self) -> None:
         assert KnowledgeBase[None](_SearchOnly(), guidance='Search first.').get_instructions() == 'Search first.'
@@ -441,9 +446,11 @@ class TestKnowledgeBase:
         assert KnowledgeBase[None](_SearchOnly()).get_description() == (
             'Search a knowledge base for passages before answering questions it could cover.'
         )
-        assert KnowledgeBase[None](_SearchOnly(), description='manuals').get_description() == (
+        assert KnowledgeBase[None](_SearchOnly(), contents='manuals').get_description() == (
             'Search a knowledge base of manuals for passages before answering questions it could cover.'
         )
+        described = KnowledgeBase[None](_SearchOnly(), contents='manuals', description='Load for product questions.')
+        assert described.get_description() == 'Load for product questions.'
 
     def test_two_that_agree_are_one_and_two_that_differ_raise(self) -> None:
         backend = InMemoryKnowledgeBase()
@@ -462,7 +469,7 @@ class TestKnowledgeBase:
             if len(seen) == 1:
                 return ModelResponse(parts=[ToolCallPart('search_knowledge_base', {'query': 'returns'})])
             if len(seen) == 2:
-                return ModelResponse(parts=[ToolCallPart('read_document', {'document_id': 'returns'})])
+                return ModelResponse(parts=[ToolCallPart('read_knowledge_base_document', {'document_id': 'returns'})])
             return ModelResponse(parts=[TextPart('done')])
 
         agent = Agent(
@@ -474,8 +481,8 @@ class TestKnowledgeBase:
 
         first = result.all_messages()[0]
         assert isinstance(first, ModelRequest) and first.instructions is not None
-        assert 'read_document' in first.instructions
-        assert seen[0] == ['search_knowledge_base', 'read_document']
+        assert 'read_knowledge_base_document' in first.instructions
+        assert seen[0] == ['search_knowledge_base', 'read_knowledge_base_document']
         returns = [
             part
             for message in result.all_messages()
@@ -483,7 +490,7 @@ class TestKnowledgeBase:
             for part in message.parts
             if isinstance(part, ToolReturnPart)
         ]
-        assert [part.tool_name for part in returns] == ['search_knowledge_base', 'read_document']
+        assert [part.tool_name for part in returns] == ['search_knowledge_base', 'read_knowledge_base_document']
         assert [record['document_id'] for record in returns[0].metadata['results']] == ['returns']
         assert str(returns[1].content).startswith('Document: returns')
 
@@ -507,7 +514,7 @@ class TestKnowledgeBase:
                 return ModelResponse(parts=[ToolCallPart('search_knowledge_base', {'query': 'q'})])
             return ModelResponse(parts=[TextPart('done')])
 
-        capability = KnowledgeBase[None](backend, description='manuals', defer_loading=True)
+        capability = KnowledgeBase[None](backend, contents='manuals', defer_loading=True)
         await Agent(FunctionModel(respond), deps_type=type(None), capabilities=[capability]).run('Search.')
 
         first_tools, first_instructions = seen[0]
@@ -675,17 +682,7 @@ class TestRequireFilter:
 
         reading = _toolset(InMemoryKnowledgeBase(_DOCUMENTS), filter=tenant, require_filter=True)
         with pytest.raises(UserError, match='require_filter is set'):
-            await reading.read_document(_ctx(None), 'returns')
-
-
-class TestCanRead:
-    async def test_a_backend_can_turn_reading_off(self) -> None:
-        class _Switchable(InMemoryKnowledgeBase):
-            can_read = False
-
-        assert list(await _toolset(_Switchable(_DOCUMENTS)).get_tools(_ctx())) == ['search_knowledge_base']
-        instructions = KnowledgeBase[None](_Switchable()).get_instructions()
-        assert isinstance(instructions, str) and 'read_document' not in instructions
+            await reading.read_knowledge_base_document(_ctx(None), 'returns')
 
 
 class TestAllowsRead:

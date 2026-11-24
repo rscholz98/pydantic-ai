@@ -34,8 +34,6 @@ if TYPE_CHECKING:
     from pydantic_ai_harness.knowledge_base._bedrock import (
         BedrockAgentRuntimeClient,
         BedrockKnowledgeBase,
-        S3Client,
-        SourceConverter,
     )
     from pydantic_ai_harness.knowledge_base._openai import OpenAIVectorStore
 
@@ -59,8 +57,6 @@ __all__ = [
     'MetadataFilter',
     'NativeFileSearchBackend',
     'OpenAIVectorStore',
-    'S3Client',
-    'SourceConverter',
     'Passage',
     'ReadableKnowledgeBase',
     'SearchMode',
@@ -72,8 +68,6 @@ __all__ = [
 _BACKENDS = {
     'BedrockAgentRuntimeClient': '_bedrock',
     'BedrockKnowledgeBase': '_bedrock',
-    'S3Client': '_bedrock',
-    'SourceConverter': '_bedrock',
     'OpenAIVectorStore': '_openai',
 }
 
